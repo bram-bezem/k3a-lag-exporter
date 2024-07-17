@@ -13,9 +13,12 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import static java.util.stream.Collectors.groupingBy;
 
 public final class ClusterLagCollector {
 
@@ -39,7 +42,7 @@ public final class ClusterLagCollector {
         final boolean clientConnected = client.isConnected();
         final long startMs = System.currentTimeMillis();
         final Set<String> allConsumerGroupIds = client.consumerGroupIds(consumerGroupFilter);
-        final Map<TopicPartition, Set<ConsumerGroupOffset>> groupOffsetResults = findConsumerGroupOffsets(allConsumerGroupIds);
+        final Map<TopicPartition, List<ConsumerGroupOffset>> groupOffsetResults = findConsumerGroupOffsets(allConsumerGroupIds);
         final Set<TopicPartitionData> topicPartitionData = findReplicaCounts(groupOffsetResults.keySet());
         final Map<TopicPartition, Long> endOffsets = findEndOffsets(topicPartitionData);
         final long pollTimeMs = System.currentTimeMillis() - startMs;
@@ -48,9 +51,9 @@ public final class ClusterLagCollector {
         return mutableClusterData;
     }
 
-    private ClusterData buildClusterData(Map<TopicPartition, Set<ConsumerGroupOffset>> consumerGroupOffsets, Map<TopicPartition, Long> endOffsets, long pollTimeMs) {
+    private ClusterData buildClusterData(Map<TopicPartition, List<ConsumerGroupOffset>> consumerGroupOffsets, Map<TopicPartition, Long> endOffsets, long pollTimeMs) {
         ClusterData clusterData = new ClusterData(clusterName);
-        for (Map.Entry<TopicPartition, Set<ConsumerGroupOffset>> entry : consumerGroupOffsets.entrySet()) {
+        for (Map.Entry<TopicPartition, List<ConsumerGroupOffset>> entry : consumerGroupOffsets.entrySet()) {
             io.statnett.k3a.lagexporter.model.TopicPartitionData topicPartitionData = clusterData.findTopicPartitionData(entry.getKey());
             for(ConsumerGroupOffset consumerGroupOffset : entry.getValue()) {
                 topicPartitionData.findConsumerGroupData(consumerGroupOffset.consumerGroupId()).setOffset(consumerGroupOffset.offset());
@@ -61,8 +64,8 @@ public final class ClusterLagCollector {
         return clusterData;
     }
 
-    private Map<TopicPartition, Set<ConsumerGroupOffset>> findConsumerGroupOffsets(final Set<String> consumerGroupIds) {
-        Map<TopicPartition, Set<ConsumerGroupOffset>> consumerGroupOffsets = new HashMap<>();
+    private Map<TopicPartition, List<ConsumerGroupOffset>> findConsumerGroupOffsets(final Set<String> consumerGroupIds) {
+        Set<ConsumerGroupOffset> consumerGroupOffsetSet = new HashSet<>();
         client.consumerGroupOffsets(consumerGroupIds)
             .forEach((consumerGroup, offsets) -> offsets.forEach((partition, offsetAndMetadata) -> {
                 final String topicName = partition.topic();
@@ -73,9 +76,9 @@ public final class ClusterLagCollector {
                     LOG.info("No offset data for partition {}", partition);
                     return;
                 }
-                consumerGroupOffsets.merge(partition, Set.of(new ConsumerGroupOffset(consumerGroup, offsetAndMetadata.offset())), ClusterLagCollector::mergeSets);
+                consumerGroupOffsetSet.add(new ConsumerGroupOffset(partition, consumerGroup, offsetAndMetadata.offset()));
             }));
-        return consumerGroupOffsets;
+        return consumerGroupOffsetSet.stream().collect(groupingBy(ConsumerGroupOffset::topicPartition, Collectors.toUnmodifiableList()));
     }
 
     private Set<TopicPartitionData> findReplicaCounts(final Set<TopicPartition> topicPartitions) {
@@ -112,14 +115,5 @@ public final class ClusterLagCollector {
         t = System.currentTimeMillis() - t;
         LOG.debug("Found end offsets in {} ms", t);
         return endOffsets;
-    }
-
-    private static Set<ConsumerGroupOffset> mergeSets(Set<ConsumerGroupOffset> a, Set<ConsumerGroupOffset> b) {
-        return new HashSet<>(a.size() + b.size()) {
-            {
-                addAll(a);
-                addAll(b);
-            }
-        };
     }
 }
