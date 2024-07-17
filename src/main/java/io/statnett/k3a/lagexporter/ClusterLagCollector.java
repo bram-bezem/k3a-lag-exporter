@@ -1,7 +1,8 @@
 package io.statnett.k3a.lagexporter;
 
-import io.statnett.k3a.lagexporter.immutable.ConsumerGroupOffset;
-import io.statnett.k3a.lagexporter.immutable.TopicPartitionData;
+import io.statnett.k3a.lagexporter.model.ConsumerGroupData;
+import io.statnett.k3a.lagexporter.model.ConsumerGroupOffset;
+import io.statnett.k3a.lagexporter.model.TopicPartitionData;
 import io.statnett.k3a.lagexporter.model.ClusterData;
 import io.statnett.k3a.lagexporter.utils.RegexStringListFilter;
 import org.apache.kafka.common.TopicPartition;
@@ -9,6 +10,7 @@ import org.apache.kafka.common.errors.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -39,29 +41,37 @@ public final class ClusterLagCollector {
     }
 
     public ClusterData collectClusterData() {
-        final boolean clientConnected = client.isConnected();
         final long startMs = System.currentTimeMillis();
         final Set<String> allConsumerGroupIds = client.consumerGroupIds(consumerGroupFilter);
         final Map<TopicPartition, List<ConsumerGroupOffset>> groupOffsetResults = findConsumerGroupOffsets(allConsumerGroupIds);
-        final Set<TopicPartitionData> topicPartitionData = findReplicaCounts(groupOffsetResults.keySet());
-        final Map<TopicPartition, Long> endOffsets = findEndOffsets(topicPartitionData);
+        final Map<TopicPartition, TopicPartitionData> topicPartitionData = findTopicPartitionData(groupOffsetResults.keySet());
         final long pollTimeMs = System.currentTimeMillis() - startMs;
-        final ClusterData mutableClusterData = buildClusterData(groupOffsetResults, endOffsets, pollTimeMs);
+        final ClusterData mutableClusterData = calculateLagAndCreateClusterData(groupOffsetResults, topicPartitionData, pollTimeMs);
         LOG.info("Polled lag data for {} in {} ms", clusterName, pollTimeMs);
         return mutableClusterData;
     }
 
-    private ClusterData buildClusterData(Map<TopicPartition, List<ConsumerGroupOffset>> consumerGroupOffsets, Map<TopicPartition, Long> endOffsets, long pollTimeMs) {
-        ClusterData clusterData = new ClusterData(clusterName);
+    private ClusterData calculateLagAndCreateClusterData(
+        Map<TopicPartition, List<ConsumerGroupOffset>> consumerGroupOffsets,
+        Map<TopicPartition, TopicPartitionData> topicPartitionData,
+        long pollTimeMs
+    ) {
+        Map<TopicPartitionData, List<ConsumerGroupData>> topicAndConsumerData = new HashMap<>();
         for (Map.Entry<TopicPartition, List<ConsumerGroupOffset>> entry : consumerGroupOffsets.entrySet()) {
-            io.statnett.k3a.lagexporter.model.TopicPartitionData topicPartitionData = clusterData.findTopicPartitionData(entry.getKey());
+            TopicPartitionData partitionData = topicPartitionData.get(entry.getKey());
+            List<ConsumerGroupData> consumerGroupData = new ArrayList<>(entry.getValue().size());
             for(ConsumerGroupOffset consumerGroupOffset : entry.getValue()) {
-                topicPartitionData.findConsumerGroupData(consumerGroupOffset.consumerGroupId()).setOffset(consumerGroupOffset.offset());
-                topicPartitionData.calculateLags(endOffsets.get(entry.getKey()));
+                long lag = partitionData.endOffset() - consumerGroupOffset.offset();
+                ConsumerGroupData newConsumerGroupData = new ConsumerGroupData(
+                    entry.getKey(),
+                    consumerGroupOffset.consumerGroupId(),
+                    consumerGroupOffset.offset(),
+                    lag);
+                consumerGroupData.add(newConsumerGroupData);
             }
+            topicAndConsumerData.put(partitionData, consumerGroupData);
         }
-        clusterData.setPollTimeMs(pollTimeMs);
-        return clusterData;
+        return new ClusterData(clusterName, Collections.unmodifiableMap(topicAndConsumerData), pollTimeMs);
     }
 
     private Map<TopicPartition, List<ConsumerGroupOffset>> findConsumerGroupOffsets(final Set<String> consumerGroupIds) {
@@ -81,29 +91,35 @@ public final class ClusterLagCollector {
         return consumerGroupOffsetSet.stream().collect(groupingBy(ConsumerGroupOffset::topicPartition, Collectors.toUnmodifiableList()));
     }
 
-    private Set<TopicPartitionData> findReplicaCounts(final Set<TopicPartition> topicPartitions) {
-        Set<TopicPartitionData> topicPartitionData = new HashSet<>();
+    private Map<TopicPartition, TopicPartitionData> findTopicPartitionData(final Set<TopicPartition> topicPartitions) {
+        Map<TopicPartition, Integer> replicaCounts = findReplicaCounts(topicPartitions);
+        Map<TopicPartition, Long> endOffsets = findEndOffsets(topicPartitions);
+        HashMap<TopicPartition, TopicPartitionData> topicPartitionData = new HashMap<>();
+        for(TopicPartition topicPartition : topicPartitions) {
+            topicPartitionData.put(topicPartition, new TopicPartitionData(topicPartition, endOffsets.get(topicPartition), replicaCounts.get(topicPartition)));
+        }
+        return Collections.unmodifiableMap(topicPartitionData);
+    }
+
+    private Map<TopicPartition, Integer> findReplicaCounts(final Set<TopicPartition> topicPartitions) {
+        final Map<TopicPartition, Integer> replicaCounts = new HashMap<>();
         Set<String> topics = topicPartitions.stream()
             .map(TopicPartition::topic)
             .collect(Collectors.toSet());
         client.describeTopics(topics).values()
             .forEach(topicDescription -> topicDescription.partitions().forEach(topicPartitionInfo -> {
                 final TopicPartition topicPartition = new TopicPartition(topicDescription.name(), topicPartitionInfo.partition());
-                topicPartitionData.add(new TopicPartitionData(topicPartition, topicPartitionInfo.replicas().size()));
+                replicaCounts.put(topicPartition, topicPartitionInfo.replicas().size());
             }));
-        return topicPartitionData;
+        return Collections.unmodifiableMap(replicaCounts);
     }
 
-    private Map<TopicPartition, Long> findEndOffsets(final Set<TopicPartitionData> topicPartitionsData) {
-        if (topicPartitionsData.isEmpty()) {
+    private Map<TopicPartition, Long> findEndOffsets(final Set<TopicPartition> topicPartitions) {
+        if (topicPartitions.isEmpty()) {
             return Collections.emptyMap();
         }
         long t = System.currentTimeMillis();
-        final Set<TopicPartition> topicPartitions = new HashSet<>();
         final Map<TopicPartition, Long> endOffsets = new HashMap<>();
-        for (final TopicPartitionData topicPartition : topicPartitionsData) {
-            topicPartitions.add(topicPartition.topicPartition());
-        }
         try {
             client.endOffsets(topicPartitions)
                 .forEach((partition, offset) -> {
@@ -114,6 +130,6 @@ public final class ClusterLagCollector {
         }
         t = System.currentTimeMillis() - t;
         LOG.debug("Found end offsets in {} ms", t);
-        return endOffsets;
+        return Collections.unmodifiableMap(endOffsets);
     }
 }

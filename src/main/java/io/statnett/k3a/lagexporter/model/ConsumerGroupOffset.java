@@ -1,4 +1,4 @@
-package io.statnett.k3a.lagexporter.immutable;
+package io.statnett.k3a.lagexporter.model;
 
 import org.apache.kafka.common.TopicPartition;
 
