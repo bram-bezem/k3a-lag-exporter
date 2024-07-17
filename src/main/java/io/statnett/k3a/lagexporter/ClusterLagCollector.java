@@ -61,13 +61,7 @@ public final class ClusterLagCollector {
             TopicPartitionData partitionData = topicPartitionData.get(entry.getKey());
             List<ConsumerGroupData> consumerGroupData = new ArrayList<>(entry.getValue().size());
             for(ConsumerGroupOffset consumerGroupOffset : entry.getValue()) {
-                long lag = partitionData.endOffset() - consumerGroupOffset.offset();
-                ConsumerGroupData newConsumerGroupData = new ConsumerGroupData(
-                    entry.getKey(),
-                    consumerGroupOffset.consumerGroupId(),
-                    consumerGroupOffset.offset(),
-                    lag);
-                consumerGroupData.add(newConsumerGroupData);
+                consumerGroupData.add(new ConsumerGroupData(consumerGroupOffset, partitionData.endOffset()));
             }
             topicAndConsumerData.put(partitionData, consumerGroupData);
         }
