@@ -46,9 +46,9 @@ public final class ClusterLagCollector {
         final Map<TopicPartition, List<ConsumerGroupOffset>> groupOffsetResults = findConsumerGroupOffsets(allConsumerGroupIds);
         final Map<TopicPartition, TopicPartitionData> topicPartitionData = findTopicPartitionData(groupOffsetResults.keySet());
         final long pollTimeMs = System.currentTimeMillis() - startMs;
-        final ClusterData mutableClusterData = calculateLagAndCreateClusterData(groupOffsetResults, topicPartitionData, pollTimeMs);
+        final ClusterData clusterData = calculateLagAndCreateClusterData(groupOffsetResults, topicPartitionData, pollTimeMs);
         LOG.info("Polled lag data for {} in {} ms", clusterName, pollTimeMs);
-        return mutableClusterData;
+        return clusterData;
     }
 
     private ClusterData calculateLagAndCreateClusterData(
