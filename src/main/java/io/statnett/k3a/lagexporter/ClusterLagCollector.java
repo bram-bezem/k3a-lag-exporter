@@ -1,9 +1,9 @@
 package io.statnett.k3a.lagexporter;
 
+import io.statnett.k3a.lagexporter.model.ClusterData;
 import io.statnett.k3a.lagexporter.model.ConsumerGroupData;
 import io.statnett.k3a.lagexporter.model.ConsumerGroupOffset;
 import io.statnett.k3a.lagexporter.model.TopicPartitionData;
-import io.statnett.k3a.lagexporter.model.ClusterData;
 import io.statnett.k3a.lagexporter.utils.RegexStringListFilter;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.TimeoutException;
