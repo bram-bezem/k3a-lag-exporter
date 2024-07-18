@@ -45,16 +45,16 @@ public final class ClusterLagCollector {
         final Set<String> allConsumerGroupIds = client.consumerGroupIds(consumerGroupFilter);
         final Map<TopicPartition, List<ConsumerGroupOffset>> groupOffsetResults = findConsumerGroupOffsets(allConsumerGroupIds);
         final Map<TopicPartition, TopicPartitionData> topicPartitionData = findTopicPartitionData(groupOffsetResults.keySet());
+        final Map<TopicPartitionData, List<ConsumerGroupData>> topicAndConsumerData = calculateLag(groupOffsetResults, topicPartitionData);
         final long pollTimeMs = System.currentTimeMillis() - startMs;
-        final ClusterData clusterData = calculateLagAndCreateClusterData(groupOffsetResults, topicPartitionData, pollTimeMs);
+        final ClusterData clusterData = new ClusterData(clusterName, topicAndConsumerData, pollTimeMs);
         LOG.info("Polled lag data for {} in {} ms", clusterName, pollTimeMs);
         return clusterData;
     }
 
-    private ClusterData calculateLagAndCreateClusterData(
+    private static Map<TopicPartitionData, List<ConsumerGroupData>> calculateLag(
         Map<TopicPartition, List<ConsumerGroupOffset>> consumerGroupOffsets,
-        Map<TopicPartition, TopicPartitionData> topicPartitionData,
-        long pollTimeMs
+        Map<TopicPartition, TopicPartitionData> topicPartitionData
     ) {
         Map<TopicPartitionData, List<ConsumerGroupData>> topicAndConsumerData = new HashMap<>();
         for (Map.Entry<TopicPartition, List<ConsumerGroupOffset>> entry : consumerGroupOffsets.entrySet()) {
@@ -65,7 +65,7 @@ public final class ClusterLagCollector {
             }
             topicAndConsumerData.put(partitionData, consumerGroupData);
         }
-        return new ClusterData(clusterName, Collections.unmodifiableMap(topicAndConsumerData), pollTimeMs);
+        return Collections.unmodifiableMap(topicAndConsumerData);
     }
 
     private Map<TopicPartition, List<ConsumerGroupOffset>> findConsumerGroupOffsets(final Set<String> consumerGroupIds) {
